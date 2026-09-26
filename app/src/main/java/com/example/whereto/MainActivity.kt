@@ -27,6 +27,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
@@ -536,7 +537,10 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun toggleVoice() {
         voiceEnabled = !voiceEnabled
-        muteButton.text = if (voiceEnabled) "🔊" else "🔇"
+        muteButton.icon = AppCompatResources.getDrawable(
+            this, if (voiceEnabled) R.drawable.ic_volume_on else R.drawable.ic_volume_off
+        )
+        muteButton.contentDescription = if (voiceEnabled) "Mute voice guidance" else "Unmute voice guidance"
         if (!voiceEnabled) textToSpeech?.stop()
     }
 
