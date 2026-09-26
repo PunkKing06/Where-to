@@ -38,19 +38,19 @@
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintStart_toStartOf="parent" />
 
-        <!-- Floats over the top of the map while a drive is active: shows the
-             next up to 3 turns, refreshed automatically as you drive. -->
+        <!-- Dedicated driving header: a large, glanceable maneuver card that
+             turns the map into a navigation view rather than a plain map. -->
         <LinearLayout
             android:id="@+id/turnListPanel"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:layout_marginStart="72dp"
+            android:layout_marginTop="20dp"
+            android:layout_marginStart="16dp"
             android:layout_marginEnd="16dp"
             android:orientation="vertical"
-            android:background="#DD1B1B1B"
-            android:elevation="4dp"
-            android:padding="12dp"
+            android:background="#F8FAFF"
+            android:elevation="12dp"
+            android:padding="18dp"
             android:visibility="gone"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintStart_toStartOf="parent"
@@ -60,9 +60,9 @@
                 android:id="@+id/turn1Text"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textSize="18sp"
+                android:textSize="24sp"
                 android:textStyle="bold"
-                android:textColor="#FFFFFF"
+                android:textColor="#172033"
                 android:text="" />
 
             <TextView
@@ -70,8 +70,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:textSize="14sp"
-                android:textColor="#CCFFFFFF"
+                android:textSize="16sp"
+                android:textColor="#1A73E8"
                 android:visibility="gone"
                 android:text="" />
 
@@ -80,8 +80,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:textSize="14sp"
-                android:textColor="#99FFFFFF"
+                android:textSize="15sp"
+                android:textColor="#596273"
                 android:visibility="gone"
                 android:text="" />
 
@@ -159,16 +159,16 @@
 
         </LinearLayout>
 
-        <!-- Small floating stop control, shown only while a drive is active
-             (the full controls panel above is hidden then). -->
+        <!-- Grounded stop control, separate from the route guidance card. -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/stopDriveButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="24dp"
             android:visibility="gone"
-            android:backgroundTint="#D32F2F"
-            android:text="⏹ Stop Drive"
+            android:backgroundTint="#FFFFFF"
+            android:textColor="#C5221F"
+            android:text="End drive"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent" />

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
@@ -66,24 +67,27 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         private const val LOW_STEPS_THRESHOLD = 3
         private const val REFETCH_FRACTION = 0.7
         private const val CAMERA_TICK_MS = 250L
-        private const val NAV_ZOOM = 18.5f
+        private const val NAV_ZOOM = 19.2f
+        private const val NAV_TILT = 55f
         // Fraction of screen height reserved above the car (via top map
         // padding) so it sits low on screen with more road visible ahead —
         // padding shrinks the "visible" region away from whichever edge you
         // pad, and the camera target centers within what's left, so top
         // padding is what pushes the target (and the car) down toward the
         // bottom of the screen.
-        private const val TOP_PADDING_FRACTION = 0.55
+        private const val TOP_PADDING_FRACTION = 0.36
     }
 
     private sealed class AvatarStyle {
+        data object NavigationCar : AvatarStyle()
         data class Arrow(val color: Int) : AvatarStyle()
         data class Car(val color: Int) : AvatarStyle()
     }
 
     private val avatarOptions: List<Pair<AvatarStyle, String>> by lazy {
         listOf(
-            AvatarStyle.Arrow(Color.parseColor("#4FC3F7")) to "Arrow (Default)",
+            AvatarStyle.NavigationCar to "3D Navigation Car (Default)",
+            AvatarStyle.Arrow(Color.parseColor("#4FC3F7")) to "Navigation Arrow",
             AvatarStyle.Car(Color.parseColor("#1A73E8")) to "Sedan",
             AvatarStyle.Car(Color.parseColor("#263238")) to "SUV",
             AvatarStyle.Car(Color.parseColor("#D32F2F")) to "Sports Car",
@@ -129,7 +133,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     // Avatar + camera
     private var carMarker: Marker? = null
-    private var selectedAvatar: AvatarStyle = AvatarStyle.Arrow(Color.parseColor("#4FC3F7"))
+    private var selectedAvatar: AvatarStyle = AvatarStyle.NavigationCar
     private var followingCamera = true
     private var lastKnownBearing = 0f
 
@@ -172,7 +176,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
                     val cameraPosition = CameraPosition.Builder()
                         .target(displayHere)
                         .zoom(NAV_ZOOM)
-                        .tilt(0f)
+                        .tilt(NAV_TILT)
                         .bearing(bearing)
                         .build()
                     map.animateCamera(CameraUpdateFactory.newCameraPosition(cameraPosition), CAMERA_TICK_MS.toInt(), null)
@@ -335,7 +339,13 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun dpToPx(dp: Int): Int = (dp * resources.displayMetrics.density).toInt()
 
+    private val navigationCarBitmap: Bitmap by lazy {
+        val source = BitmapFactory.decodeResource(resources, R.drawable.navigation_car_3d)
+        Bitmap.createScaledBitmap(source, dpToPx(78), dpToPx(78), true)
+    }
+
     private fun bitmapFor(style: AvatarStyle): Bitmap = when (style) {
+        AvatarStyle.NavigationCar -> navigationCarBitmap
         is AvatarStyle.Arrow -> arrowBitmap(style.color)
         is AvatarStyle.Car -> carBitmap(style.color)
     }
@@ -497,7 +507,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
             }
             lastKnownBearing = bearing
             val cameraPosition = CameraPosition.Builder()
-                .target(displayHere).zoom(NAV_ZOOM).tilt(0f).bearing(bearing).build()
+                .target(displayHere).zoom(NAV_ZOOM).tilt(NAV_TILT).bearing(bearing).build()
             map.animateCamera(CameraUpdateFactory.newCameraPosition(cameraPosition))
         }
     }
@@ -520,12 +530,14 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         isDriveActive = true
         controlsPanel.visibility = View.GONE
         stopDriveButton.visibility = View.VISIBLE
+        hamburgerButton.visibility = View.GONE
         muteButton.visibility = View.VISIBLE
         turnListPanel.visibility = View.VISIBLE
         turn1Text.text = "Scouting nearby roads…"
         turn2Text.visibility = View.GONE
         turn3Text.visibility = View.GONE
         map.isMyLocationEnabled = false
+        map.isBuildingsEnabled = true
         map.setMapStyle(MapStyleOptions(DARK_MAP_STYLE))
         val topPaddingPx = (resources.displayMetrics.heightPixels * TOP_PADDING_FRACTION).toInt()
         map.setPadding(0, topPaddingPx, 0, 0)
@@ -581,6 +593,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         stopDriveButton.visibility = View.GONE
         recenterButton.visibility = View.GONE
         muteButton.visibility = View.GONE
+        hamburgerButton.visibility = View.VISIBLE
         controlsPanel.visibility = View.VISIBLE
         if (::map.isInitialized) {
             map.setMapStyle(null)
@@ -702,10 +715,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     /**
-     * Clean, solid Maps-style route line: a soft light-blue outline under a
-     * brighter blue core, both wide enough to visually cover the street —
-     * matching Google Maps' own route highlighting rather than a glowing
-     * neon effect.
+     * A full-road navigation treatment: a wide white road mask makes the
+     * selected street unmistakable, then a saturated blue core fills it.
+     * This reads as a highlighted road corridor rather than a thin line.
      */
     private fun drawRoutePolyline(points: List<LatLng>) {
         mapPolyline?.remove()
@@ -714,8 +726,8 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         mapPolylineOutline = map.addPolyline(
             PolylineOptions()
                 .addAll(points)
-                .color(Color.parseColor("#8AB4F8"))
-                .width(34f)
+                .color(Color.parseColor("#F8FBFF"))
+                .width(78f)
                 .jointType(JointType.ROUND)
                 .startCap(RoundCap())
                 .endCap(RoundCap())
@@ -723,8 +735,8 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         mapPolyline = map.addPolyline(
             PolylineOptions()
                 .addAll(points)
-                .color(Color.parseColor("#4285F4"))
-                .width(22f)
+                .color(Color.parseColor("#1A73E8"))
+                .width(56f)
                 .jointType(JointType.ROUND)
                 .startCap(RoundCap())
                 .endCap(RoundCap())
