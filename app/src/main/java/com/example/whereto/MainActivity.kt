@@ -1,4 +1,4 @@
-package com.example.randomdrive
+package com.example.whereto
 
 import android.Manifest
 import android.content.Intent
@@ -508,7 +508,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         if (!voiceEnabled) textToSpeech?.stop()
     }
 
-    // ---------- Starting / stopping a random drive ----------
+    // ---------- Starting / stopping a spontaneous drive ----------
 
     private fun startDrive() {
         val origin = currentLocation
@@ -752,7 +752,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun speak(text: String) {
         if (voiceEnabled && ttsReady && text.isNotBlank()) {
-            textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "randomdrive_tts")
+            textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "whereto_tts")
         }
     }
 

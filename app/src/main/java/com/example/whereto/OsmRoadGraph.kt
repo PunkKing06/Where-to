@@ -1,4 +1,4 @@
-package com.example.randomdrive
+package com.example.whereto
 
 import com.google.android.gms.maps.model.LatLng
 import org.json.JSONObject

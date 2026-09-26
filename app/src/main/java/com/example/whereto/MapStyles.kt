@@ -1,4 +1,4 @@
-package com.example.randomdrive
+package com.example.whereto
 
 /**
  * Google Maps' style JSON config for a dark/night theme, applied only

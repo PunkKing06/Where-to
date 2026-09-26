@@ -2,11 +2,11 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
 android {
-    namespace 'com.example.randomdrive'
+    namespace 'com.example.whereto'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.randomdrive"
+        applicationId "com.example.whereto"
         minSdk 23
         targetSdk 34
         versionCode 1

@@ -1,4 +1,4 @@
-# Random Drive
+# Where to?
 
 An Android app for drivers who just want to go — no destination, ever. It
 picks a real road at random at every intersection, shows a close-up,
@@ -9,7 +9,7 @@ wandering.
 1. Finds your current location on a live embedded Google Map.
 2. Slide to set the **explore radius** — how large an area of local roads
    to pull in (1–15 km).
-3. Tap **"🎲 Start Random Drive"** — it downloads the real local street
+3. Tap **"🎲 Start Where to?"** — it downloads the real local street
    network around you and starts walking it: a genuinely random real road
    at every intersection, no destination in mind at all.
 4. The screen switches to a close, tilted **driving-mode view** — zoomed
@@ -217,7 +217,7 @@ Two things worth knowing:
 
 ## Setup (required before it will run)
 
-1. **Open in Android Studio.** File → Open → select the `RandomDrive` folder.
+1. **Open in Android Studio.** File → Open → select the `WhereTo` folder.
    Let Gradle sync (it will download dependencies automatically).
 
 2. **Get a Google Maps API key** — see "Getting a Google Maps API key"
@@ -225,11 +225,10 @@ Two things worth knowing:
    Android has unlimited free mobile usage), though Google still requires
    billing to be enabled on the project to issue the key at all.
 
-3. **Add the key** in `app/src/main/AndroidManifest.xml`, replacing:
-   ```
-   android:value="YOUR_GOOGLE_MAPS_API_KEY_HERE"
-   ```
-   with your real key.
+3. **For GitHub Actions builds, add the key as a repository Actions secret**
+   named `MAPS_API_KEY`. The build workflow injects it into the manifest only
+   while building, so the key is not stored in the repository. For a local
+   Android Studio build, supply the key locally and do not commit it.
 
 4. **Run it** on a device or emulator with Google Play services and the
    Google Maps app installed (an emulator with a "Google APIs" or
@@ -248,7 +247,7 @@ Two things worth knowing:
    Copy the key that appears.
 5. Click into the new key to restrict it:
    - **Application restrictions → Android apps → Add an item:**
-     - Package name: `com.example.randomdrive`
+     - Package name: `com.example.whereto`
      - SHA-1 certificate fingerprint: **`B3:79:E7:4E:CB:E6:16:3A:FB:0C:87:38:F8:E9:A7:26:2B:CD:C7:44`**
 
        This is the fingerprint of the `app/debug.keystore` file already
@@ -258,8 +257,8 @@ Two things worth knowing:
        build.
    - **API restrictions → Restrict key →** check only "Maps SDK for Android."
    - Save.
-6. Paste the key into the manifest (step 3 above), or into the
-   `MAPS_API_KEY` GitHub secret if you're using the Actions build below.
+6. Add the key as the `MAPS_API_KEY` GitHub Actions secret. The build workflow
+   injects it into the manifest during the build.
 
 ### About the debug keystore
 Android signs every debug build with a "debug keystore" — normally your
@@ -288,7 +287,7 @@ Studio, this project includes a GitHub Actions workflow
 4. Go to the **Actions** tab → **Build APK** workflow → **Run workflow**
    (or just push a commit — it runs automatically).
 5. Once it finishes (a couple of minutes), open the run and download the
-   **RandomDrive-debug-apk** artifact — it's a zip containing `app-debug.apk`.
+   **WhereTo-debug-apk** artifact — it's a zip containing `app-debug.apk`.
 6. Copy that APK to your phone and open it. You'll need to allow
    "install unknown apps" for whatever app you use to open it (Files,
    Chrome, etc.) — this is normal for any app installed outside the Play
