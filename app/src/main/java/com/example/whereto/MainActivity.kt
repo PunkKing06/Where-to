@@ -127,6 +127,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     private var currentPath: RandomPath? = null
     private var currentStepIndex = 0
     private var routeFetchInProgress = false
+    private var roadCacheWarmInProgress = false
     private var hasWarnedForCurrentStep = false
     private var mapPolyline: Polyline? = null
     private var mapPolylineOutline: Polyline? = null
@@ -300,8 +301,23 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
                 val here = LatLng(location.latitude, location.longitude)
                 currentLocation = here
                 map.moveCamera(CameraUpdateFactory.newLatLngZoom(here, 13f))
+                warmRoadCache(here)
             }
         }
+    }
+
+    /** Load or refresh this neighbourhood before the user presses Start Drive. */
+    private fun warmRoadCache(here: LatLng) {
+        if (roadCacheWarmInProgress || isDriveActive) return
+        roadCacheWarmInProgress = true
+        val radiusMeters = (radiusKm * 1000).toInt().coerceAtLeast(500)
+        Thread {
+            val graph = OsmRoadGraph.fetchGraph(this, here, radiusMeters)
+            runOnUiThread {
+                roadCacheWarmInProgress = false
+                if (!isDriveActive && graph != null) roadGraph = graph
+            }
+        }.start()
     }
 
     // ---------- Hamburger drawer: avatar picker ----------
@@ -341,7 +357,13 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private val navigationCarBitmap: Bitmap by lazy {
         val source = BitmapFactory.decodeResource(resources, R.drawable.navigation_car_3d)
-        Bitmap.createScaledBitmap(source, dpToPx(78), dpToPx(78), true)
+        if (source != null) {
+            Bitmap.createScaledBitmap(source, dpToPx(78), dpToPx(78), true)
+        } else {
+            // Keep the avatar picker usable if a device cannot decode the
+            // optional car artwork.
+            arrowBitmap(Color.parseColor("#1A73E8"), dpToPx(78))
+        }
     }
 
     private fun bitmapFor(style: AvatarStyle): Bitmap = when (style) {
@@ -546,12 +568,15 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         val radiusMeters = (radiusKm * 1000).toInt().coerceAtLeast(500)
         routeFetchInProgress = true
         Thread {
-            val graph = OsmRoadGraph.fetchGraph(origin, radiusMeters)
+            val graph = roadGraph?.takeIf {
+                it.fetchRadiusMeters >= radiusMeters &&
+                    distanceMetersBetween(origin, it.fetchCenter) <= it.fetchRadiusMeters * 0.35
+            } ?: OsmRoadGraph.fetchGraph(this, origin, radiusMeters)
             runOnUiThread {
                 routeFetchInProgress = false
                 if (graph == null) {
                     Toast.makeText(
-                        this, "Couldn't load nearby roads — check your connection and try again.", Toast.LENGTH_LONG
+                        this, OsmRoadGraph.lastFailure ?: "Couldn't load nearby roads.", Toast.LENGTH_LONG
                     ).show()
                     stopDrive()
                     return@runOnUiThread
@@ -686,7 +711,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         routeFetchInProgress = true
         val radiusMeters = (radiusKm * 1000).toInt().coerceAtLeast(500)
         Thread {
-            val graph = OsmRoadGraph.fetchGraph(here, radiusMeters)
+            val graph = OsmRoadGraph.fetchGraph(this, here, radiusMeters)
             runOnUiThread {
                 routeFetchInProgress = false
                 if (graph != null) {

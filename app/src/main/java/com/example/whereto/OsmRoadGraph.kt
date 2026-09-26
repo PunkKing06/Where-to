@@ -1,10 +1,12 @@
 package com.example.whereto
 
+import android.content.Context
 import com.google.android.gms.maps.model.LatLng
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
@@ -26,7 +28,7 @@ data class RandomPath(
 class RoadGraph(
     val nodePositions: Map<Long, LatLng>,
     val adjacency: Map<Long, List<Long>>,
-    private val edgeStreetName: Map<Long, String>,
+    val edgeStreetName: Map<Long, String>,
     val fetchCenter: LatLng,
     val fetchRadiusMeters: Int
 ) {
@@ -47,7 +49,7 @@ class RoadGraph(
     fun streetNameFor(from: Long, to: Long): String = edgeStreetName[edgeKey(from, to)] ?: "the road"
 }
 
-private fun edgeKey(a: Long, b: Long): Long = a * 1_000_003L + b
+fun edgeKey(a: Long, b: Long): Long = a * 1_000_003L + b
 
 fun distanceMetersBetween(a: LatLng, b: LatLng): Double {
     val results = FloatArray(1)
@@ -170,22 +172,54 @@ fun offsetPoint(origin: LatLng, bearingDegrees: Float, distanceMeters: Double): 
  */
 object OsmRoadGraph {
 
-    fun fetchGraph(center: LatLng, radiusMeters: Int): RoadGraph? {
+    @Volatile
+    var lastFailure: String? = null
+        private set
+
+    /**
+     * Gets a nearby road graph. Saved graphs are always preferred, so a
+     * successful lookup keeps working on later drives without another
+     * request to the public road service.
+     */
+    fun fetchGraph(context: Context, center: LatLng, radiusMeters: Int): RoadGraph? {
+        lastFailure = null
+        RoadGraphCache.loadBest(context, center, radiusMeters)?.let { return it }
         return try {
-            val query = "[out:json][timeout:20];" +
+            val query = "[out:json][timeout:25];" +
                 "way[\"highway\"~\"^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|" +
                 "secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street)$\"]" +
-                "(around:$radiusMeters,${center.latitude},${center.longitude});(._;>;);out body;"
-            val url = URL("https://overpass-api.de/api/interpreter?data=" + URLEncoder.encode(query, "UTF-8"))
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 12000
-            connection.readTimeout = 20000
-            connection.requestMethod = "GET"
+                "(around:$radiusMeters,${center.latitude},${center.longitude});out body;>;out skel qt;"
+            val encodedQuery = URLEncoder.encode(query, "UTF-8")
+            val endpoints = listOf(
+                "https://overpass-api.de/api/interpreter",
+                "https://overpass.kumi.systems/api/interpreter"
+            )
+            var responseText: String? = null
+            for (endpoint in endpoints) {
+                try {
+                    val connection = URL(endpoint).openConnection() as HttpURLConnection
+                    connection.connectTimeout = 12000
+                    connection.readTimeout = 45000
+                    connection.requestMethod = "POST"
+                    connection.doOutput = true
+                    connection.setRequestProperty("User-Agent", "WhereTo-Android/1.0")
+                    connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+                    connection.outputStream.bufferedWriter().use { it.write("data=$encodedQuery") }
+                    if (connection.responseCode in 200..299) {
+                        responseText = connection.inputStream.bufferedReader().use { it.readText() }
+                    } else {
+                        lastFailure = "Road-data service returned HTTP ${connection.responseCode}"
+                    }
+                    connection.disconnect()
+                    if (responseText != null) break
+                } catch (error: Exception) {
+                    // Try the next public Overpass endpoint.
+                    lastFailure = "Road-data service error: ${error.javaClass.simpleName}"
+                }
+            }
+            if (responseText == null) return null
 
-            val responseText = connection.inputStream.bufferedReader().use { it.readText() }
-            connection.disconnect()
-
-            val elements = JSONObject(responseText).getJSONArray("elements")
+            val elements = JSONObject(responseText ?: return null).getJSONArray("elements")
             val nodePositions = HashMap<Long, LatLng>()
 
             data class WayInfo(val nodeIds: List<Long>, val name: String, val oneway: Int)
@@ -273,9 +307,15 @@ object OsmRoadGraph {
                 }
             }
 
-            if (nodePositions.isEmpty() || adjacency.isEmpty()) null
-            else RoadGraph(nodePositions, adjacency, edgeStreetName, center, radiusMeters)
+            if (nodePositions.isEmpty() || adjacency.isEmpty()) {
+                lastFailure = "No suitable drivable roads found in this area"
+                null
+            }
+            else RoadGraph(nodePositions, adjacency, edgeStreetName, center, radiusMeters).also {
+                RoadGraphCache.save(context, it)
+            }
         } catch (e: Exception) {
+            lastFailure = "Could not read nearby road data"
             null
         }
     }
