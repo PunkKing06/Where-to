@@ -330,6 +330,7 @@ object OsmRoadGraph {
     fun buildRandomPath(graph: RoadGraph, startNode: Long, cameFrom: Long?, desiredHops: Int = 12): RandomPath {
         val nodeSequence = mutableListOf(startNode)
         val visited = mutableSetOf(startNode)
+        val startPosition = graph.nodePositions[startNode] ?: return RandomPath(emptyList(), emptyList())
         var prev = cameFrom
         var current = startNode
 
@@ -350,8 +351,26 @@ object OsmRoadGraph {
             // forced road segments until it either reaches a real choice of
             // exits or proves that it simply ends.
             val throughRoadChoices = choices.filterNot { leadsToDeadEnd(graph, it, current) }
-            val next = (if (throughRoadChoices.isNotEmpty()) throughRoadChoices else choices)
-                .let { it[Random.nextInt(it.size)] }
+            val nonDeadEndChoices = if (throughRoadChoices.isNotEmpty()) throughRoadChoices else choices
+
+            // In a street grid, an ordinary random walk can make a neat
+            // rectangle and end back where it began. Prefer roads that move
+            // outward from the start, and never deliberately close a loop.
+            val currentDistance = graph.nodePositions[current]?.let { distanceMetersBetween(it, startPosition) } ?: 0.0
+            val noLoop = nonDeadEndChoices.filter { next ->
+                val distanceFromStart = graph.nodePositions[next]?.let { distanceMetersBetween(it, startPosition) } ?: Double.MAX_VALUE
+                nodeSequence.size < 4 || distanceFromStart > 80.0
+            }
+            val outward = noLoop.filter { next ->
+                val distanceFromStart = graph.nodePositions[next]?.let { distanceMetersBetween(it, startPosition) } ?: 0.0
+                distanceFromStart >= currentDistance - 12.0
+            }
+            val next = (if (outward.isNotEmpty()) outward else if (noLoop.isNotEmpty()) noLoop else nonDeadEndChoices)
+                .maxBy { next ->
+                    // Keep the choice spontaneous, while making outward
+                    // movement the dominant factor.
+                    (graph.nodePositions[next]?.let { distanceMetersBetween(it, startPosition) } ?: 0.0) + Random.nextDouble(0.0, 90.0)
+                }
             nodeSequence.add(next)
             visited.add(next)
             prev = current
