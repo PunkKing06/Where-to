@@ -7,6 +7,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.io.File
+import java.util.PriorityQueue
 import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
@@ -181,13 +182,14 @@ object OsmRoadGraph {
      * successful lookup keeps working on later drives without another
      * request to the public road service.
      */
-    fun fetchGraph(context: Context, center: LatLng, radiusMeters: Int): RoadGraph? {
+    fun fetchGraph(context: Context, center: LatLng, radiusMeters: Int, avoidResidential: Boolean = false, avoidTolls: Boolean = true): RoadGraph? {
         lastFailure = null
         RoadGraphCache.loadBest(context, center, radiusMeters)?.let { return it }
         return try {
+            val roadTypes = if (avoidResidential) "motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified" else "motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street"
+            val tollFilter = if (avoidTolls) "[\"toll\"!=\"yes\"]" else ""
             val query = "[out:json][timeout:25];" +
-                "way[\"highway\"~\"^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|" +
-                "secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street)$\"]" +
+                "way[\"highway\"~\"^($roadTypes)$\"]$tollFilter" +
                 "(around:$radiusMeters,${center.latitude},${center.longitude});out body;>;out skel qt;"
             val encodedQuery = URLEncoder.encode(query, "UTF-8")
             val endpoints = listOf(
@@ -327,6 +329,7 @@ object OsmRoadGraph {
      */
     fun buildRandomPath(graph: RoadGraph, startNode: Long, cameFrom: Long?, desiredHops: Int = 12): RandomPath {
         val nodeSequence = mutableListOf(startNode)
+        val visited = mutableSetOf(startNode)
         var prev = cameFrom
         var current = startNode
 
@@ -334,9 +337,23 @@ object OsmRoadGraph {
             val neighbors = graph.adjacency[current].orEmpty()
             if (neighbors.isEmpty()) return@repeat
             val nonBacktrack = neighbors.filter { it != prev }
-            val choices = if (nonBacktrack.isNotEmpty()) nonBacktrack else neighbors
-            val next = choices[Random.nextInt(choices.size)]
+            // A random drive should explore outward, not trace little blocks
+            // repeatedly. Only revisit a road when it is genuinely the sole
+            // way out of a dead end.
+            val unvisited = nonBacktrack.filter { it !in visited }
+            val choices = when {
+                unvisited.isNotEmpty() -> unvisited
+                nonBacktrack.isNotEmpty() -> nonBacktrack
+                else -> neighbors
+            }
+            // Skip cul-de-sacs and access spurs. We look through a chain of
+            // forced road segments until it either reaches a real choice of
+            // exits or proves that it simply ends.
+            val throughRoadChoices = choices.filterNot { leadsToDeadEnd(graph, it, current) }
+            val next = (if (throughRoadChoices.isNotEmpty()) throughRoadChoices else choices)
+                .let { it[Random.nextInt(it.size)] }
             nodeSequence.add(next)
+            visited.add(next)
             prev = current
             current = next
         }
@@ -353,6 +370,63 @@ object OsmRoadGraph {
             steps.add(PlannedStep(turnInstruction(inBearing, outBearing, streetName), b, distanceMetersBetween(a, b)))
         }
 
+        return RandomPath(steps, polyline)
+    }
+
+    private fun leadsToDeadEnd(graph: RoadGraph, firstNode: Long, cameFrom: Long): Boolean {
+        var current = firstNode
+        var previous = cameFrom
+        repeat(40) {
+            val forward = graph.adjacency[current].orEmpty().filter { it != previous }
+            when {
+                forward.isEmpty() -> return true
+                forward.size > 1 -> return false
+                else -> {
+                    previous = current
+                    current = forward.single()
+                }
+            }
+        }
+        // A long continuous road is useful even if no intersection appeared
+        // in the small look-ahead window.
+        return false
+    }
+
+    /** Finds a real connected route back to a node already in the local graph. */
+    fun buildPathTo(graph: RoadGraph, startNode: Long, endNode: Long): RandomPath? {
+        if (startNode == endNode) return null
+        val previous = HashMap<Long, Long>()
+        val distances = HashMap<Long, Double>()
+        data class QueueNode(val id: Long, val distance: Double)
+        val queue = PriorityQueue<QueueNode>(compareBy { it.distance })
+        previous[startNode] = startNode
+        distances[startNode] = 0.0
+        queue.add(QueueNode(startNode, 0.0))
+        while (queue.isNotEmpty() && !previous.containsKey(endNode)) {
+            val current = queue.remove()
+            if (current.distance != distances[current.id]) continue
+            for (next in graph.adjacency[current.id].orEmpty()) {
+                val edge = distanceMetersBetween(graph.nodePositions.getValue(current.id), graph.nodePositions.getValue(next))
+                val candidate = current.distance + edge
+                if (candidate < (distances[next] ?: Double.MAX_VALUE)) {
+                    distances[next] = candidate
+                    previous[next] = current.id
+                    queue.add(QueueNode(next, candidate))
+                }
+            }
+        }
+        if (!previous.containsKey(endNode)) return null
+        val nodes = mutableListOf(endNode)
+        while (nodes.last() != startNode) nodes.add(previous.getValue(nodes.last()))
+        nodes.reverse()
+        val polyline = nodes.mapNotNull { graph.nodePositions[it] }
+        val steps = mutableListOf<PlannedStep>()
+        for (i in 1 until nodes.size - 1) {
+            val a = graph.nodePositions[nodes[i - 1]] ?: continue
+            val b = graph.nodePositions[nodes[i]] ?: continue
+            val c = graph.nodePositions[nodes[i + 1]] ?: continue
+            steps.add(PlannedStep(turnInstruction(bearingBetween(a, b), bearingBetween(b, c), graph.streetNameFor(nodes[i], nodes[i + 1])), b, distanceMetersBetween(a, b)))
+        }
         return RandomPath(steps, polyline)
     }
 

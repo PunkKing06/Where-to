@@ -12,6 +12,16 @@
         android:roundIcon="@drawable/ic_whereto_logo"
         android:theme="@style/Theme.WhereTo">
 
+        <service
+            android:name=".MediaControlService"
+            android:label="Where to? media controls"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- Get a free API key at https://console.cloud.google.com/google/maps-apis
              and enable "Maps SDK for Android" for your project. -->
         <meta-data

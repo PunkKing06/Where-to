@@ -13,21 +13,25 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
+import android.view.MotionEvent
 import android.location.Location
+import android.media.session.PlaybackState
+import android.media.session.MediaController
+import android.media.MediaMetadata
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.View
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.content.res.AppCompatResources
+import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
@@ -52,7 +56,9 @@ import com.google.android.gms.maps.model.MarkerOptions
 import com.google.android.gms.maps.model.Polyline
 import com.google.android.gms.maps.model.PolylineOptions
 import com.google.android.gms.maps.model.RoundCap
+import android.widget.ImageButton
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.switchmaterial.SwitchMaterial
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -70,6 +76,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         private const val CAMERA_TICK_MS = 250L
         private const val NAV_ZOOM = 19.2f
         private const val NAV_TILT = 55f
+        // A dependable nearby area for a spontaneous drive. Keeping this
+        // automatic removes an unnecessary setup choice before driving.
+        private const val ROAD_GRAPH_RADIUS_METERS = 3000
         // Fraction of screen height reserved above the car (via top map
         // padding) so it sits low on screen with more road visible ahead —
         // padding shrinks the "visible" region away from whichever edge you
@@ -101,22 +110,36 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
 
     private lateinit var drawerLayout: DrawerLayout
-    private lateinit var radiusLabel: TextView
     private lateinit var controlsPanel: View
     private lateinit var navigateButton: MaterialButton
     private lateinit var stopDriveButton: MaterialButton
-    private lateinit var hamburgerButton: MaterialButton
-    private lateinit var recenterButton: MaterialButton
-    private lateinit var muteButton: MaterialButton
+    private lateinit var hamburgerButton: ImageButton
+    private lateinit var recenterButton: ImageButton
+    private lateinit var muteButton: ImageButton
     private lateinit var carOptionsContainer: LinearLayout
     private lateinit var toiletMenuItem: TextView
+    private lateinit var mediaControls: LinearLayout
+    private lateinit var mediaPrevious: ImageButton
+    private lateinit var mediaPlayPause: ImageButton
+    private lateinit var mediaNext: ImageButton
+    private lateinit var mediaTitle: TextView
+    private lateinit var mediaArtist: TextView
+    private lateinit var mediaArtwork: ImageView
+    private var observedMediaController: MediaController? = null
+    private val mediaCallback = object : MediaController.Callback() {
+        override fun onMetadataChanged(metadata: MediaMetadata?) = runOnUiThread { refreshMediaControls() }
+        override fun onPlaybackStateChanged(state: PlaybackState?) = runOnUiThread { refreshMediaControls() }
+        override fun onSessionDestroyed() = runOnUiThread { refreshMediaControls() }
+    }
+    private lateinit var enableMediaItem: TextView
+    private lateinit var avoidResidentialSwitch: SwitchMaterial
+    private lateinit var avoidTollsSwitch: SwitchMaterial
     private lateinit var turnListPanel: View
     private lateinit var turn1Text: TextView
     private lateinit var turn2Text: TextView
     private lateinit var turn3Text: TextView
 
     private var currentLocation: LatLng? = null
-    private var radiusKm = 3.0
 
     private var textToSpeech: TextToSpeech? = null
     private var ttsReady = false
@@ -127,6 +150,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     private var roadGraph: RoadGraph? = null
     private var currentPath: RandomPath? = null
     private var currentStepIndex = 0
+    private var driveStartNode: Long? = null
+    private var driveStartLocation: LatLng? = null
+    private var isReturningHome = false
     private var routeFetchInProgress = false
     private var roadCacheWarmInProgress = false
     private var hasWarnedForCurrentStep = false
@@ -135,7 +161,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     // Avatar + camera
     private var carMarker: Marker? = null
-    private var selectedAvatar: AvatarStyle = AvatarStyle.NavigationCar
+    private var selectedAvatar: AvatarStyle = AvatarStyle.Arrow(Color.parseColor("#1A73E8"))
     private var followingCamera = true
     private var lastKnownBearing = 0f
 
@@ -198,9 +224,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         mapFragment.getMapAsync(this)
 
         drawerLayout = findViewById(R.id.drawerLayout)
-        radiusLabel = findViewById(R.id.radiusLabel)
         controlsPanel = findViewById(R.id.controls)
-        val radiusSeekBar = findViewById<SeekBar>(R.id.radiusSeekBar)
         navigateButton = findViewById(R.id.navigateButton)
         stopDriveButton = findViewById(R.id.stopDriveButton)
         hamburgerButton = findViewById(R.id.hamburgerButton)
@@ -208,6 +232,21 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         muteButton = findViewById(R.id.muteButton)
         carOptionsContainer = findViewById(R.id.carOptionsContainer)
         toiletMenuItem = findViewById(R.id.toiletMenuItem)
+        mediaControls = findViewById(R.id.mediaControls)
+        mediaPrevious = findViewById(R.id.mediaPrevious)
+        mediaPlayPause = findViewById(R.id.mediaPlayPause)
+        mediaNext = findViewById(R.id.mediaNext)
+        mediaTitle = findViewById(R.id.mediaTitle)
+        mediaArtist = findViewById(R.id.mediaArtist)
+        mediaArtwork = findViewById(R.id.mediaArtwork)
+        enableMediaItem = findViewById(R.id.enableMediaItem)
+        avoidResidentialSwitch = findViewById(R.id.avoidResidentialSwitch)
+        avoidTollsSwitch = findViewById(R.id.avoidTollsSwitch)
+        val routePreferences = getSharedPreferences("route_preferences", MODE_PRIVATE)
+        avoidResidentialSwitch.isChecked = routePreferences.getBoolean("avoid_residential", false)
+        avoidTollsSwitch.isChecked = routePreferences.getBoolean("avoid_tolls", true)
+        avoidResidentialSwitch.setOnCheckedChangeListener { _, checked -> routePreferences.edit().putBoolean("avoid_residential", checked).apply() }
+        avoidTollsSwitch.setOnCheckedChangeListener { _, checked -> routePreferences.edit().putBoolean("avoid_tolls", checked).apply() }
         turnListPanel = findViewById(R.id.turnListPanel)
         turn1Text = findViewById(R.id.turn1Text)
         turn2Text = findViewById(R.id.turn2Text)
@@ -218,18 +257,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
             if (ttsReady) textToSpeech?.language = Locale.getDefault()
         }
 
-        radiusSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                radiusKm = (progress + 1).toDouble()
-                radiusLabel.text = "Explore radius: ${radiusKm.toInt()} km"
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-
         navigateButton.setOnClickListener { startDrive() }
-        stopDriveButton.setOnClickListener { stopDrive() }
-        hamburgerButton.setOnClickListener { drawerLayout.openDrawer(GravityCompat.START) }
+        stopDriveButton.setOnClickListener { confirmEndDrive() }
+        hamburgerButton.setOnClickListener { refreshMediaControls(); drawerLayout.openDrawer(GravityCompat.START) }
         recenterButton.setOnClickListener { recenterCamera() }
         muteButton.setOnClickListener { toggleVoice() }
         toiletMenuItem.setOnClickListener {
@@ -256,6 +286,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     }
 
     override fun onDestroy() {
+        observedMediaController?.unregisterCallback(mediaCallback)
         super.onDestroy()
         if (isDriveActive) {
             stopDriveLocationUpdates()
@@ -305,15 +336,79 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
                 warmRoadCache(here)
             }
         }
+        mediaPrevious.setOnClickListener { MediaControlService.activeController(this)?.transportControls?.skipToPrevious() }
+        mediaPlayPause.setOnClickListener {
+            val controller = MediaControlService.activeController(this) ?: return@setOnClickListener
+            if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) controller.transportControls.pause()
+            else controller.transportControls.play()
+            mediaPlayPause.setImageResource(if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) R.drawable.ic_media_play else R.drawable.ic_media_pause)
+        }
+        mediaNext.setOnClickListener { MediaControlService.activeController(this)?.transportControls?.skipToNext() }
+        val openPlayer = View.OnClickListener { openActiveMusicPlayer() }
+        mediaControls.setOnClickListener(openPlayer)
+        mediaArtwork.setOnClickListener(openPlayer)
+        mediaTitle.setOnClickListener(openPlayer)
+        mediaArtist.setOnClickListener(openPlayer)
+        var swipeStartX = 0f
+        var swipeStartY = 0f
+        mediaControls.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { swipeStartX = event.x; swipeStartY = event.y }
+                MotionEvent.ACTION_UP -> {
+                    val distanceX = event.x - swipeStartX
+                    if (kotlin.math.abs(distanceX) >= 90 && kotlin.math.abs(distanceX) > kotlin.math.abs(event.y - swipeStartY)) {
+                        if (distanceX < 0) MediaControlService.activeController(this)?.transportControls?.skipToNext()
+                        else MediaControlService.activeController(this)?.transportControls?.skipToPrevious()
+                        mediaControls.animate().translationX(if (distanceX < 0) -20f else 20f).setDuration(110).withEndAction {
+                            mediaControls.animate().translationX(0f).setDuration(160).start()
+                        }.start()
+                    }
+                }
+            }
+            false
+        }
+        enableMediaItem.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
     }
+
+    private fun openActiveMusicPlayer() {
+        val controller = MediaControlService.activeController(this) ?: return
+        try {
+            packageManager.getLaunchIntentForPackage(controller.packageName)?.let(::startActivity)
+                ?: controller.sessionActivity?.send()
+        } catch (_: Exception) {
+            Toast.makeText(this, "Couldn't open the music player.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun refreshMediaControls() {
+        enableMediaItem.visibility = if (MediaControlService.hasNotificationAccess(this)) View.GONE else View.VISIBLE
+        val controller = MediaControlService.activeController(this)
+        if (controller != observedMediaController) {
+            observedMediaController?.unregisterCallback(mediaCallback)
+            observedMediaController = controller
+            controller?.registerCallback(mediaCallback)
+        }
+        mediaControls.visibility = if (isDriveActive && controller != null) View.VISIBLE else View.GONE
+        mediaPlayPause.setImageResource(if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING) R.drawable.ic_media_pause else R.drawable.ic_media_play)
+        controller?.metadata?.let { metadata ->
+            mediaTitle.text = metadata.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "Now playing"
+            mediaArtist.text = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
+            metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)?.let { mediaArtwork.setImageBitmap(it) }
+        }
+    }
+
+    private fun avoidResidential() = getSharedPreferences("route_preferences", MODE_PRIVATE).getBoolean("avoid_residential", false)
+    private fun avoidTolls() = getSharedPreferences("route_preferences", MODE_PRIVATE).getBoolean("avoid_tolls", true)
 
     /** Load or refresh this neighbourhood before the user presses Start Drive. */
     private fun warmRoadCache(here: LatLng) {
         if (roadCacheWarmInProgress || isDriveActive) return
         roadCacheWarmInProgress = true
-        val radiusMeters = (radiusKm * 1000).toInt().coerceAtLeast(500)
+        val radiusMeters = ROAD_GRAPH_RADIUS_METERS
         Thread {
-            val graph = OsmRoadGraph.fetchGraph(this, here, radiusMeters)
+            val graph = OsmRoadGraph.fetchGraph(this, here, radiusMeters, avoidResidential(), avoidTolls())
             runOnUiThread {
                 roadCacheWarmInProgress = false
                 if (!isDriveActive && graph != null) roadGraph = graph
@@ -393,6 +488,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
             RectF(cx - radius, cy - radius * 0.5f, cx + radius, cy + radius * 1.6f),
             shadowPaint
         )
+
+        // This opaque puck cleanly interrupts the route below the vehicle.
+        canvas.drawCircle(cx, cy, radius * 1.2f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = Color.WHITE })
 
         val path = Path().apply {
             moveTo(cx, cy - radius * 1.15f)
@@ -537,9 +635,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun toggleVoice() {
         voiceEnabled = !voiceEnabled
-        muteButton.icon = AppCompatResources.getDrawable(
-            this, if (voiceEnabled) R.drawable.ic_volume_on else R.drawable.ic_volume_off
-        )
+        muteButton.setImageResource(if (voiceEnabled) R.drawable.ic_volume_on else R.drawable.ic_volume_off)
         muteButton.contentDescription = if (voiceEnabled) "Mute voice guidance" else "Unmute voice guidance"
         if (!voiceEnabled) textToSpeech?.stop()
     }
@@ -554,9 +650,12 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         }
 
         isDriveActive = true
+        hamburgerButton.setBackgroundResource(R.drawable.bg_map_control)
+        hamburgerButton.setColorFilter(Color.WHITE)
+        refreshMediaControls()
         controlsPanel.visibility = View.GONE
         stopDriveButton.visibility = View.VISIBLE
-        hamburgerButton.visibility = View.GONE
+        hamburgerButton.visibility = View.VISIBLE
         muteButton.visibility = View.VISIBLE
         turnListPanel.visibility = View.VISIBLE
         turn1Text.text = "Scouting nearby roads…"
@@ -569,13 +668,13 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         map.setPadding(0, topPaddingPx, 0, 0)
         followingCamera = true
 
-        val radiusMeters = (radiusKm * 1000).toInt().coerceAtLeast(500)
+        val radiusMeters = ROAD_GRAPH_RADIUS_METERS
         routeFetchInProgress = true
         Thread {
             val graph = roadGraph?.takeIf {
                 it.fetchRadiusMeters >= radiusMeters &&
                     distanceMetersBetween(origin, it.fetchCenter) <= it.fetchRadiusMeters * 0.35
-            } ?: OsmRoadGraph.fetchGraph(this, origin, radiusMeters)
+            } ?: OsmRoadGraph.fetchGraph(this, origin, radiusMeters, avoidResidential(), avoidTolls())
             runOnUiThread {
                 routeFetchInProgress = false
                 if (graph == null) {
@@ -592,6 +691,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
                     stopDrive()
                     return@runOnUiThread
                 }
+                driveStartNode = nearest
+                driveStartLocation = origin
+                isReturningHome = false
                 val path = OsmRoadGraph.buildRandomPath(graph, nearest, cameFrom = null)
                 if (path.steps.isEmpty()) {
                     Toast.makeText(this, "Couldn't find a path from here — try a bigger explore radius.", Toast.LENGTH_LONG).show()
@@ -607,6 +709,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private fun stopDrive() {
         isDriveActive = false
+        hamburgerButton.setBackgroundResource(R.drawable.bg_map_control_idle)
+        hamburgerButton.setColorFilter(Color.parseColor("#1F2937"))
+        refreshMediaControls()
         stopDriveLocationUpdates()
         cameraUpdateHandler.removeCallbacks(cameraUpdateRunnable)
         mapPolyline?.remove()
@@ -616,6 +721,9 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         carMarker?.remove()
         carMarker = null
         roadGraph = null
+        driveStartNode = null
+        driveStartLocation = null
+        isReturningHome = false
         currentPath = null
         currentStepIndex = 0
         turnListPanel.visibility = View.GONE
@@ -629,6 +737,36 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
             map.setPadding(0, 0, 0, 0)
         }
         if (hasLocationPermission()) map.isMyLocationEnabled = true
+    }
+
+    private fun confirmEndDrive() {
+        val graph = roadGraph
+        val start = driveStartNode
+        if (graph == null || start == null || currentLocation == null) {
+            stopDrive()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("End drive?")
+            .setMessage("Would you like directions back to where this drive started?")
+            .setNegativeButton("End drive") { _, _ -> stopDrive() }
+            .setPositiveButton("Return to start") { _, _ ->
+                isReturningHome = true
+                routeFetchInProgress = true
+                val here = currentLocation ?: return@setPositiveButton
+                Thread {
+                    val path = graph.nearestNode(here)?.let { OsmRoadGraph.buildPathTo(graph, it, start) }
+                    runOnUiThread {
+                        routeFetchInProgress = false
+                        if (path != null && path.polyline.size > 1) {
+                            applyNewPath(path, announce = true)
+                        } else {
+                            Toast.makeText(this, "Couldn't find a road route back from here.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }.start()
+            }
+            .show()
     }
 
     private fun startDriveLocationUpdates() {
@@ -656,6 +794,22 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
         if (distanceMetersBetween(here, graph.fetchCenter) > graph.fetchRadiusMeters * REFETCH_FRACTION) {
             refetchGraphAndContinue(here)
+            return
+        }
+
+        if (isReturningHome && driveStartLocation?.let { distanceMetersBetween(here, it) <= ARRIVAL_METERS } == true) {
+            Toast.makeText(this, "You’re back at your starting point.", Toast.LENGTH_SHORT).show()
+            stopDrive()
+            return
+        }
+
+        if (path.steps.isEmpty()) {
+            if (isReturningHome) returnHomePath(here) else continueRandomPath(here)
+            return
+        }
+
+        if (isReturningHome && minDistanceToPolyline(here, path.polyline) > DEVIATION_METERS) {
+            returnHomePath(here)
             return
         }
 
@@ -689,7 +843,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
             speak("In ${distanceToStep.toInt()} meters, ${step.instruction}")
         }
 
-        if (path.steps.size - currentStepIndex <= LOW_STEPS_THRESHOLD) {
+        if (!isReturningHome && path.steps.size - currentStepIndex <= LOW_STEPS_THRESHOLD) {
             continueRandomPath(here)
         }
     }
@@ -710,12 +864,26 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         }.start()
     }
 
+    private fun returnHomePath(here: LatLng) {
+        val graph = roadGraph ?: return
+        val start = driveStartNode ?: return
+        if (routeFetchInProgress) return
+        routeFetchInProgress = true
+        Thread {
+            val path = graph.nearestNode(here)?.let { OsmRoadGraph.buildPathTo(graph, it, start) }
+            runOnUiThread {
+                routeFetchInProgress = false
+                if (path != null && path.polyline.size > 1) applyNewPath(path, announce = false)
+            }
+        }.start()
+    }
+
     private fun refetchGraphAndContinue(here: LatLng) {
         if (routeFetchInProgress) return
         routeFetchInProgress = true
-        val radiusMeters = (radiusKm * 1000).toInt().coerceAtLeast(500)
+        val radiusMeters = ROAD_GRAPH_RADIUS_METERS
         Thread {
-            val graph = OsmRoadGraph.fetchGraph(this, here, radiusMeters)
+            val graph = OsmRoadGraph.fetchGraph(this, here, radiusMeters, avoidResidential(), avoidTolls())
             runOnUiThread {
                 routeFetchInProgress = false
                 if (graph != null) {
